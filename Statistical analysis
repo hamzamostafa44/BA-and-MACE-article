@@ -1,0 +1,434 @@
+##Article's title: Bile Acids and Risk of Adverse Cardiovascular Events and All-Cause Mortality in Patients with Acute Coronary Syndrome
+##DOI: https://doi.org/10.3390/nu16071062
+
+##Libraries
+library(tidyverse)
+library(survival)
+library(survminer)
+library(mice)
+library(readr)
+library(VIM)
+library(ggplot2)
+library(glmnet)
+library(readxl)
+library(haven)
+library(dplyr)
+library(mice)
+library(missForest)
+library(caret)
+library(elasticnet)
+library(plyr)
+library(stats)
+library(reshape2)
+library(ipred)
+library(RNOmni)
+library(nortest)
+library(survminer)
+library(survival)
+library(corrplot)
+library(tibble)
+
+
+#To check for missing data >20%
+is.na(BA)
+table(is.na(BA))
+colSums(is.na(BA))
+table(colSums(is.na(BA)) > 20)
+percentage <- as.data.frame(colMeans(is.na(BA))*100) 
+NA_BA <- subset(percentage,percentage>20)
+rownames(NA_BA)
+colnames(percentage)[1]<-"percentage"
+missing_BA<- tibble::rownames_to_column(percentage,"Bile acids")
+missing_BA<-missing_BA[-c(1),]
+
+#Plot missing value of BA >20%
+P <- ggplot(missing_BA, aes(x=`Bile acids`, y = percentage)) + 
+  geom_point() +
+  geom_text(aes(label = ifelse(percentage > 20, as.character(`Bile acids`), "")), hjust = 1.1, vjust = 0, size = 3, color = "red") + 
+geom_hline(aes(yintercept = 20), linetype = 'dashed', color = 'blue') +
+xlab('Bile acids') +
+ylab('Percentage') +
+ylim(0, 50) +
+theme_classic()+
+theme(plot.title = element_text(face = 'bold', size = 12, hjust = 0.5),
+      axis.title.x = element_text(angle =0, hjust = 0, size = 8),
+      legend.title = element_text(size = 0, face = 'bold'),
+      legend.text = element_text(size = 8, face = 'bold'),
+      legend.key.size = unit(0.05, 'cm'),
+      legend.key.width = unit(0.05, 'cm'),
+      legend.position = c(0.90,0.95),
+      legend.background = element_rect(linewidth = 0.5, linetype = 'solid', colour = 'grey'),
+      panel.background = element_blank(),
+      panel.grid.major = element_line(color = 'white', linetype = 2)) +
+  scale_color_manual(values = c(`TRUE` = "red", `FALSE` = "black"), name = "Lineage")
+
+print(P)
+
+#Remove BA >20%
+BA <- BA[,-c(16)]
+
+# Apply random forest imputation
+set.seed(1)
+imp_missfor <- missForest(as.data.frame(BA), maxiter = 10, verbose = TRUE)
+
+# Access the imputed data
+imputed_BA <- imp_missfor$ximp
+table(is.na(imputed_BA))
+
+
+#Density plots for the imputed BAs (11 BAs)
+ggplot() +  
+  geom_density(aes(x = BA$UDCA, fill = "BA"), alpha = 0.5) +
+  geom_density(aes(x = imputed_BA$`UDCA (nM)`, fill = "imputed_BA"), alpha = 0.5) +
+  ylab("Density") +
+  xlab('UDCA') +
+  scale_fill_manual(values = c("BA" = "blue", "imputed_BA" = "yellow"),
+                    labels = c("Before imputation", "After imputation")) +
+  guides(fill = guide_legend(title = ""))
+
+
+#Remove id before normalization of BA
+imputed_BAsinid <- imputed_BA[,-c(1)]
+
+#Normalize BA with inverse normal transform
+Nor <- sapply(imputed_BAsinid, function(x)RankNorm(x))
+BA_nor <- cbind(Nor,merged_DB$id)
+colnames(BA_nor)[16] <- "id"
+BA_nor <- BA_nor[,c(16,1:15)]
+
+#Heatmap of BA using Spearman correlation (change the names first)
+colnames(Nor)
+colnames(Nor)[1:15] <- c("CA", "CDCA", "DCA", "GCA", "GCDCA", "GDCA", "GUDCA", "GLCA",  "HDCA", "LCA", "TCA", "TCDCA", "TDCA",  "TLCA", "UDCA")
+colnames(BA)[2:16] <- c("CA", "CDCA", "DCA", "GCA", "GCDCA", "GDCA", "GUDCA", "GLCA",  "HDCA", "LCA", "TCA", "TCDCA", "TDCA",  "TLCA", "UDCA")
+colnames(BA_nor)[2:16] <- c("CA", "CDCA", "DCA", "GCA", "GCDCA", "GDCA", "GUDCA", "GLCA",  "HDCA", "LCA", "TCA", "TCDCA", "TDCA",  "TLCA", "UDCA")
+HM <- cor(Nor, method = "spearman")
+
+# Reorder data
+data_melt <- melt(HM)               
+head(data_melt) 
+
+# Create heatmap with ggplot2
+ggp <- ggplot(data_melt, aes(Var1, Var2)) +                           
+  geom_tile(aes(fill = value))
+ggp
+ggp + scale_fill_gradient(low = "pink", high = "red")
+
+#Check for NA in the interesting covariates only (But first change the names of the columns)
+MACE_cov <- MACE_DB[c(5,6,9,23,25,26,27,29,32,36,37,38,39,59,105,106,107)]
+colnames(MACE_cov)[c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17)] <- c("Age", "Sex", "BMI", "Smoking", "T2D", "Dyslipid", "HTA", "Aspirin", "BB", "Diur", "OAM", "Insulin", "Statin", "eGFR", "Angina", "STEMI", "NSTEMI")
+
+is.na(MACE_cov)
+table(is.na(MACE_cov))
+colSums(is.na(MACE_cov))
+table(colSums(is.na(MACE_cov)) > 20)
+percentage_2 <- as.data.frame(colMeans(is.na(MACE_cov))*100) 
+colnames(percentage_2)[1]<-"percentage"
+missing_MACE<- tibble::rownames_to_column(percentage_2,"Covariates")
+
+#Plot missing value of covariates >10%
+P_2 <- ggplot(missing_MACE, aes(x=`Covariates`, y = percentage)) + 
+  geom_point() +
+  geom_text(aes(label = ifelse(percentage > 10, as.character(`Covariates`), "")), hjust = 1.1, vjust = 0, size = 3, color = "red") + 
+  geom_hline(aes(yintercept = 10), linetype = 'dashed', color = 'blue') +
+  xlab('Covariates') +
+  ylab('Percentage') +
+  ylim(0, 20) +
+  theme_classic()+
+  theme(plot.title = element_text(face = 'bold', size = 12, hjust = 0.5),
+        axis.title.x = element_text(angle =0, hjust = 0, size = 8),
+        legend.title = element_text(size = 0, face = 'bold'),
+        legend.text = element_text(size = 8, face = 'bold'),
+        legend.key.size = unit(0.05, 'cm'),
+        legend.key.width = unit(0.05, 'cm'),
+        legend.position = c(0.90,0.95),
+        legend.background = element_rect(linewidth = 0.5, linetype = 'solid', colour = 'grey'),
+        panel.background = element_blank(),
+        panel.grid.major = element_line(color = 'white', linetype = 2)) +
+  scale_color_manual(values = c(`TRUE` = "red", `FALSE` = "black"), name = "Lineage")
+
+print(P_2)
+
+# Apply mice imputation (Take note, only BMI has to be imputed)
+DB_mice <- MACE_cov[,c(1,2,3)]   #Just to make a DB contains Age, sex with BMI for mice imputations
+imp_mice <- mice(DB_mice
+                 , m = 5, maxit = 50, meth = c("pmm"), seed = 500)
+imp_mice <- complete(imp_mice)
+table(is.na(imp_mice))
+mean(imp_mice$BMI)
+sd(imp_mice$BMI)
+mean(imp_mice$BMI, na.rm = TRUE)
+sd(imp_mice$BMI, na.rm = TRUE)
+
+#Density plots for the imputed BMI
+ggplot() +  
+  geom_density(aes(x = DB_mice$BMI, fill = "DB_mice"), alpha = 0.5) +
+  geom_density(aes(x = imp_mice$BMI, fill = "imp_mice"), alpha = 0.5) +
+  ylab("Density") +
+  xlab('BMI') +
+  scale_fill_manual(values = c("DB_mice" = "blue", "imp_mice" = "yellow"),
+                    labels = c("Before imputation", "After imputation")) +
+  guides(fill = guide_legend(title = ""))
+
+
+#Adjust the smoking and a factor of 3 answers for smoking
+MACE_cov$Smoking <- as.factor(MACE_cov$Smoking)
+MACE_cov[102,4] <- "Nunca"
+MACE_cov[215,4] <- "Nunca"
+MACE_cov$Smoking <- MACE_cov$Smoking %>%
+  recode("Nunca" = 1, "Exfumador >= 1 año" = 2, "Exfumador < 1 año" = 2, "Actual" = 3)
+
+#Combine the covariates with the adjusted smoking and the imputed BMI (we call it: Final_mice)
+MACE_cov2 <- MACE_cov[,-c(3)]
+MACE_cov3 <- cbind(MACE_cov2, imp_mice$BMI)
+colnames(MACE_cov3)[17] <- "BMI"
+MACE_cov3 <- MACE_cov3[,c(1,2,17,3:16)]
+Final_mice <- MACE_cov3
+
+
+#Merge the two imputed DB (BA and covariates)
+Final_DB <- cbind(Final_mice, imputed_BA$id)
+colnames(Final_DB)[18] <- "id"
+Final_DB <- Final_DB[,c(18,1:17)]
+Final_impDB <- merge(Final_DB, BA_nor, by = "id")
+
+#Add mortality, follow up time and MACE to the final_impDB
+DB_MTM <- ACM_DB[,c(1,166,170,262,265)]
+DB_cox <- merge(Final_impDB, DB_MTM, by = "id")
+
+
+#Cox regression for MACE and mortality
+model1 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ CA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model1)
+model2 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ CDCA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model2)
+model3 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ DCA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model3)
+model4 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ GCA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model4)
+model5 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ GCDCA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model5)
+model6 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ GDCA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model6)
+model7 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ GUDCA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model7)
+model8 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ GLCA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model8)
+model9 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ HDCA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model9)
+model10 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ LCA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model10)
+model11 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ TCA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model11)
+model12 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ TCDCA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model12)
+model13 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ TDCA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model13)
+model14 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ TLCA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model14)
+model15 <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ UDCA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model15)
+
+mean(DB_cox$betweenMACEdateinyears)
+
+#adjusted model
+p.adj <- p.adjust(c(0.629,0.739,0.819,0.243,0.203,0.968,0.815,0.526,0.291,0.313,0.542,0.107,0.400,0.311,0.902), method = "BH")
+p.adj
+
+#Cox regression for mortality
+model1_1 <- coxph(Surv(DB_cox$X_t, DB_cox$Mortality1) ~ CA + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_cox)
+summary(model1_1)
+
+#Elastic net for MACE
+DB_Enet <- DB_cox[,c(34,35,(19:33))] ##create a DB for bile acid, MACE and follow up time
+mean(DB_Enet$betweenMACEdateinyears)
+#Change the name of the Mace and follow up time to "Status" and "Time"
+colnames(DB_Enet)[1] <- "status"
+colnames(DB_Enet)[2] <- "time"
+
+#Obtaining alpha and lambda 
+#Train and test sets
+model <- list()
+fit <- list()
+coef <- list()
+c <- list()
+alpha <- list()
+pred <- list()
+lambda <- list()
+cindex <- list()
+set.seed(1)
+for (i in 1:10) {
+  print(i)
+  ind <- sample(1:nrow(DB_Enet)*0.9, replace = F)
+  train <- as.matrix(DB_Enet[ind,])
+  test <- as.matrix(DB_Enet[-ind,])
+  model[[i]] <- cv.glmnet(train[,-match(c("time","status"), colnames(train))], train[,match(c("time","status"), colnames(train))],
+                          family = "cox", type.measure = "C", keep = T, gamma = seq(0.1,1,0.05), relax = T, nfolds = 10)
+  
+  lambda[[i]] <- model[[i]]$relaxed$lambda.min
+  alpha[[i]] <- model[[i]]$relaxed$gamma.min
+  
+  fit[[i]] <- glmnet(train[,-match(c("time","status"), colnames(train))], train[,match(c("time","status"), colnames(train))],
+                          family = "cox", alpha = alpha[[i]], lambda = lambda[[i]], relax = T)
+  
+  coef[[i]] <- as.matrix(coef(fit[[i]]))
+  coef[[i]] <- coef[[i]][coef[[i]] != 0,]
+  pred[[i]] <- predict(fit[[i]], newx = test[,-match(c("time","status"), colnames(train))])              
+  cindex[[i]]  <- Cindex(pred[[i]], test[,match(c("time","status"), colnames(train))])    
+                                                
+}
+
+out <- data.frame()
+for (i in 1:10){
+  out <- cbind(cindex, alpha, lambda)
+  }
+
+#Find the coefficients for alpha and lambda (Training set)
+set.seed(12345)
+my_coef <- list()
+for (i in 1:100){
+  print(i)
+  ind <- sample(1:nrow(DB_Enet), nrow(DB_Enet)*0.9, replace = F)
+  train <- as.matrix(DB_Enet[ind,])
+  test <- as.matrix(DB_Enet[-ind,])
+  fit <- glmnet(train[,-match(c("time","status"), colnames(train))], train[,match(c("time","status"), colnames(train))],
+                family = "cox", alpha = 0.1, lambda = 0.0072709841698586, relax = T)
+  my_coef[[i]] <- as.matrix(coef(fit))
+  my_coef[[i]] <- my_coef[[i]][my_coef[[i]] !=0,]
+
+}
+
+#Select the coefficients that appear 100 times
+Final_coef <- c()
+for (i in 1:100) {
+  Final_coef <- c(Final_coef, my_coef[[i]])
+}
+
+Final_coef <- Final_coef[names(Final_coef) %in%
+                         names(table(names(Final_coef))[table(names(Final_coef)) == 100])]
+
+coef <- matrix(NA,nrow=100, ncol = length(table(names(Final_coef))))
+for (i in 1:length(table(names(Final_coef)))){
+  c <- Final_coef[names(Final_coef) %in% names(table(names(Final_coef)))[i]]
+  coef[,i] <- c
+}
+
+colnames(coef) <- names(table(names(Final_coef)))
+
+#Calculate mean and sd of the selected bile acids
+est <- apply(coef, 2, mean)
+est_sd <- apply(coef, 2, sd)
+sqrt <- rep(sqrt(100), times = 8)
+DF_coef <- cbind(est, est_sd, sqrt)
+DF_coef <- as.data.frame(DF_coef)
+DF_coef <- DF_coef %>% mutate(lower =est-1.96*(est_sd/sqrt))
+DF_coef <- DF_coef %>% mutate(upper =est+1.96*(est_sd/sqrt))
+
+#Forest plot (create CI first, optional step)
+DF_CI <- tibble::rownames_to_column(DF_coef, "Bile acids")
+DF_CI$`Bile acids` <- factor(DF_CI$`Bile acids`)
+
+#Negative and positive
+DF_neg <- DF_coef[DF_coef['est'] < 0, ]
+DF_pos <- DF_coef[DF_coef['est'] > 0, ]
+
+
+#create forest plot for positive and negative BAs
+Positive_plot <- ggplot(data = DF_pos, aes(x = reorder(row.names(DF_pos), est), y = est, ymin = lower, ymax = upper)) +  
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.1, cex = 0.8) +
+  scale_y_continuous(limits = c(0.1, 0.5), breaks = seq(0.0, 0.5, by = 0.1), expand = c(0, 0)) +
+  coord_flip() +
+  geom_point(shape = 15, size = 2) +
+  scale_x_discrete(position = "top") +
+  ylab("") +
+  xlab('Bile acids') +
+  theme(plot.title = element_text(hjust = 0.5, face = 'bold'),
+        axis.title.y = element_text(size = 11))
+
+
+Negative_plot <- ggplot(data = DF_neg, aes(x = reorder(row.names(DF_neg), -est), y = est, ymin = lower, ymax = upper)) +  
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.1, cex = 0.8) +
+  scale_y_continuous(limits = c(-0.45, -0.05), breaks = seq(-0.5, -0.1, by = 0.1), expand = c(0, 0)) +
+  coord_flip() +
+  geom_point(shape = 15, size = 2) +
+  scale_x_discrete() +
+  ylab("") +
+  xlab('Bile acids') +
+  theme(plot.title = element_text(hjust = 0.5, face = 'bold'),
+        axis.title.y = element_text(size = 11))
+
+print(Positive_plot)
+print(Negative_plot)
+
+Figure <- ggarrange(Negative_plot, Positive_plot)
+annotate_figure(Figure, bottom = text_grob("Coef value (95% CI)",
+                color = "black", face = "bold", size = 10))
+
+DF_pos <- as.data.frame(DF_pos)
+DF_neg <- as.data.frame(DF_neg)
+
+#Estimation to create the BA score (To make a cox regression again with significant 8 BAs together)
+set.seed(474)
+my_cindex <- c()
+for (i in 1:1000) {
+  ind <- sample(1:nrow(DB_Enet)*0.9, replace = F)
+  train <- as.matrix(DB_Enet[ind,])
+  test <- as.matrix(DB_Enet[-ind,])
+  pred <- matrix(NA, nrow=nrow(train), ncol = length(est))
+  for (g in 1:ncol(pred)) {
+    pred[,g] <- train[,match(names(est)[g], colnames(DB_Enet))] * est[g]
+  }
+  colnames(pred) <- names(est)
+  pred <- apply(pred, 1, sum)
+  my_cindex <- c(my_cindex, Cindex(pred, train[,match(c("time","status"), colnames(train))]))
+}
+mean(my_cindex)
+sd(my_cindex)
+sqrt = sqrt(1000)
+my_cindex
+
+upper = mean(my_cindex)+1.96*(sd(my_cindex)/sqrt)
+upper
+lower = mean(my_cindex)-1.96*(sd(my_cindex)/sqrt)
+lower
+
+#Create the BA score
+score <- ((DB_Enet$CA*-0.4167776) + (DB_Enet$TDCA*-0.3356517) + (DB_Enet$HDCA*-0.2106442) + (DB_Enet$GCDCA*-0.2067620) + (DB_Enet$LCA*-0.1227365) + (DB_Enet$DCA*0.4677664) + (DB_Enet$GCA*0.3455109) + (DB_Enet$CDCA*0.3361688))
+score
+
+DB_score <- cbind(DB_cox,score) 
+zscore <- (DB_score$score - mean(DB_score$score)) / sd(DB_score$score)
+DB_zscore <- cbind(DB_score,zscore)
+
+#Cox regression with the score
+#MV model
+modelscore <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ zscore + Age + Sex + BMI + Smoking + T2D + Dyslipid + HTA + Aspirin + BB + Diur + OAM + Insulin + Statin + eGFR + Angina + STEMI + NSTEMI, data = DB_zscore)
+summary(modelscore)
+
+#crude model
+modelscore_crude <- coxph(Surv(DB_cox$betweenMACEdateinyears, DB_cox$MACE) ~ zscore, data = DB_zscore)
+summary(modelscore_crude)
+
+mean(DB_zscore$betweenMACEdateinyears)
+
+
+#Density plots for the imputed BAs (11 BAs)
+ggplot() +  
+  geom_density(aes(x = BA$`CA`, fill = "BA"), alpha = 0.5) +
+  geom_density(aes(x = imputed_BA$`CA (nM)`, fill = "imputed_BA"), alpha = 0.5) +
+  ylab("Density") +
+  xlab('CA') +
+  scale_fill_manual(values = c("BA" = "blue", "imputed_BA" = "red"),
+                    labels = c("Before imputation", "After imputation")) +
+  guides(fill = guide_legend(title = ""))
+
+
+#Demographic data
+mean(ACM_DB$IMC, na.rm = TRUE)
+sd(ACM_DB$IMC, na.rm = TRUE)
+sapply(ACM_DB, function(x)mean(x))
+sapply(ACM_DB, function(x)sd(x))
+table(ACM_DB$APDM)
+mean(imp_mice$BMI)
+sd(imp_mice$BMI)
+
+
